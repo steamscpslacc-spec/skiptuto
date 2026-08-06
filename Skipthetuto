@@ -1,0 +1,373 @@
+-- Standalone script to skip tds tuto (execute both in tuto and when back in lobby)
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+local function clickGuiButton(btn)
+    if not btn then return false end
+    local ok = pcall(function()
+        if firesignal then
+            firesignal(btn.MouseButton1Down)
+            firesignal(btn.MouseButton1Up)
+            firesignal(btn.MouseButton1Click)
+            firesignal(btn.Activated)
+        else
+            for _, conn in ipairs(getconnections(btn.MouseButton1Down) or {}) do
+                conn:Fire()
+            end
+            for _, conn in ipairs(getconnections(btn.MouseButton1Up) or {}) do
+                conn:Fire()
+            end
+            for _, conn in ipairs(getconnections(btn.MouseButton1Click) or {}) do
+                conn:Fire()
+            end
+            for _, conn in ipairs(btn.Activated and getconnections(btn.Activated) or {}) do
+                conn:Fire()
+            end
+        end
+    end)
+    return ok
+end
+
+local function clickButtonByText(pattern)
+    local clicked = false
+    for _, child in ipairs(LocalPlayer.PlayerGui:GetDescendants()) do
+        if child:IsA("GuiButton") and child.Visible then
+            local text = ""
+            pcall(function() text = tostring(child.Text) end)
+            if text == "" then
+                for _, desc in ipairs(child:GetDescendants()) do
+                    if desc:IsA("TextLabel") then
+                        text = tostring(desc.Text)
+                        break
+                    end
+                end
+            end
+            if string.find(string.lower(text), string.lower(pattern)) then
+                if clickGuiButton(child) then
+                    clicked = true
+                end
+            end
+        end
+    end
+    return clicked
+end
+
+local function StartTutorialSkip()
+    task.spawn(function()
+        if not game:IsLoaded() then game.Loaded:Wait() end
+        local NetworkMod = require(ReplicatedStorage.Shared.Modules.Network)
+        
+        local rep = ReplicatedStorage:WaitForChild("StateReplicators", 5)
+        rep = rep and rep:WaitForChild("GameStateReplicator", 5)
+        
+        local isLobby = false
+        pcall(function()
+            isLobby = workspace:FindFirstChild("Lobby") ~= nil or game.PlaceId == 3260590327
+        end)
+
+        local isTutorial = false
+        pcall(function()
+            if isLobby then
+                local tutorial = LocalPlayer:WaitForChild("Tutorial", 5)
+                if tutorial and (tutorial.Value == 1 or tutorial.Value == 2) then
+                    isTutorial = true
+                end
+            else
+                isTutorial = rep and rep:GetAttribute("Tutorial") == true
+            end
+        end)
+
+        if not isTutorial then
+            warn("tutorial_skip.lua: Not in tutorial state, aborting.")
+            return
+        end
+
+        if not isLobby then
+
+            local GameStateMod = require(ReplicatedStorage.Shared.Modules.GameState)
+            
+           
+            task.spawn(function()
+                local voteRep = ReplicatedStorage:WaitForChild("StateReplicators", 10)
+                voteRep = voteRep and voteRep:WaitForChild("VoteReplicator", 10)
+                if voteRep then
+                    while not isLobby do
+                        local enabled = voteRep:GetAttribute("Enabled")
+                        local title = voteRep:GetAttribute("Title")
+                        if enabled == true and (title == "Ready?" or title == "Skip?") then
+                            pcall(function()
+                                game.ReplicatedStorage.RemoteFunction:InvokeServer("Voting", "Skip")
+                            end)
+                        end
+                        task.wait(0.5)
+                    end
+                end
+            end)
+
+            -- Handle initial ready prompt
+            local introDone = false
+            task.spawn(function()
+                while not introDone do
+                    local tri = false
+                    pcall(function() tri = GameStateMod.Replicator:Get("TutorialReadyPrompt") == true end)
+                    if tri then
+                        pcall(function() NetworkMod.Channel("TutorialReady"):FireServer("Ready") end)
+                        introDone = true
+                    end
+                    task.wait(0.3)
+                end
+            end)
+
+            -- Ready up remote
+            pcall(function() NetworkMod.Channel("TutorialReady"):FireServer("Ready") end)
+
+            local function waitForPrompt(promptName)
+                while true do
+                    local list = require(ReplicatedStorage.Client.Interfaces.Stores.Shared.DialogStore).getState()
+                    for _, d in ipairs(list) do
+                        if d.dialog and d.dialog.TutorialPrompt == promptName then
+                            return d
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end
+
+            --  Scout placement
+            waitForPrompt("ScoutSelectionPromptShown")
+            while rep:GetAttribute("AllowedSlot") ~= 1 do
+                task.wait(0.2)
+            end
+            task.wait(1.5) -- wait for commander to finish speaking
+
+            pcall(function() NetworkMod.Channel("TutorialFlow"):FireServer("PromptShown", "ScoutSelectionPromptShown") end)
+            task.wait(0.5)
+            pcall(function() NetworkMod.Channel("Hotbar"):FireServer("Click", 1) end)
+            task.wait(0.5)
+            pcall(function()
+                NetworkMod.Channel("Troops"):InvokeServer("Place", {
+                    Position = Vector3.new(-7.065066814422607, 17.500024795532227, -25.335153579711914),
+                    Rotation = CFrame.new()
+                }, "Scout")
+            end)
+
+            -- 2. Sniper placement
+            waitForPrompt("SniperSelectionPromptShown")
+            while rep:GetAttribute("AllowedSlot") ~= 2 do
+                task.wait(0.2)
+            end
+            task.wait(1.5) -- wait for commander to finish speaking
+
+            pcall(function() NetworkMod.Channel("TutorialFlow"):FireServer("PromptShown", "SniperSelectionPromptShown") end)
+            task.wait(0.5)
+            pcall(function() NetworkMod.Channel("Hotbar"):FireServer("Click", 2) end)
+            task.wait(0.5)
+            pcall(function()
+                NetworkMod.Channel("Troops"):InvokeServer("Place", {
+                    Position = Vector3.new(-4.383995056152344, 22.529680252075195, -0.24254226684570312),
+                    Rotation = CFrame.new()
+                }, "Sniper")
+            end)
+
+            -- 3. Scout upgrade
+            waitForPrompt("ScoutUpgradePromptShown")
+            while rep:GetAttribute("AllowedUpgradeTower") ~= "Scout" or rep:GetAttribute("AllowedUpgradeType") ~= "Upgrade" do
+                task.wait(0.2)
+            end
+            task.wait(1.5) -- wait for commander to finish speaking
+
+            pcall(function() NetworkMod.Channel("TutorialFlow"):FireServer("PromptShown", "ScoutUpgradePromptShown") end)
+            task.wait(0.5)
+            
+            local scoutModel = nil
+            for _, tower in ipairs(workspace.Towers:GetChildren()) do
+                if (tower:GetPivot().Position - Vector3.new(-7.065066814422607, 17.500024795532227, -25.335153579711914)).Magnitude < 1.5 then
+                    scoutModel = tower
+                    break
+                end
+            end
+            if scoutModel then
+                pcall(function() game.ReplicatedStorage.RemoteFunction:InvokeServer("Troops", "Upgrade", "Set", {Troop = scoutModel, Path = 1}) end)
+                task.wait(0.3)
+                pcall(function() game.ReplicatedStorage.RemoteFunction:InvokeServer("Troops", "Upgrade", "Set", {Troop = scoutModel, Path = 1}) end)
+            end
+
+            -- 4. Sniper upgrade
+            waitForPrompt("SniperUpgradePromptShown")
+            while rep:GetAttribute("AllowedUpgradeTower") ~= "Sniper" or rep:GetAttribute("AllowedUpgradeType") ~= "Upgrade" do
+                task.wait(0.2)
+            end
+            task.wait(1.5) -- wait for commander to finish speaking
+
+            pcall(function() NetworkMod.Channel("TutorialFlow"):FireServer("PromptShown", "SniperUpgradePromptShown") end)
+            task.wait(0.5)
+
+            local sniperModel = nil
+            for _, tower in ipairs(workspace.Towers:GetChildren()) do
+                if (tower:GetPivot().Position - Vector3.new(-4.383995056152344, 22.529680252075195, -0.24254226684570312)).Magnitude < 1.5 then
+                    sniperModel = tower
+                    break
+                end
+            end
+            if sniperModel then
+                pcall(function() game.ReplicatedStorage.RemoteFunction:InvokeServer("Troops", "Upgrade", "Set", {Troop = sniperModel, Path = 1}) end)
+                task.wait(0.3)
+                pcall(function() game.ReplicatedStorage.RemoteFunction:InvokeServer("Troops", "Upgrade", "Set", {Troop = sniperModel, Path = 1}) end)
+            end
+
+            -- Wait for victory
+            repeat task.wait(1) until GameStateMod.Replicator:Get("GameOver") == true
+
+            task.wait(3)
+
+            -- Click Return To Lobby button
+            local clickedReturn = false
+            for i = 1, 30 do
+                -- Try direct React path click first
+                local returnBtn = LocalPlayer.PlayerGui:FindFirstChild("ReactGameNewRewards", true)
+                returnBtn = returnBtn and returnBtn:FindFirstChild("gameOver", true)
+                returnBtn = returnBtn and returnBtn:FindFirstChild("RewardsScreen", true)
+                returnBtn = returnBtn and returnBtn:FindFirstChild("ReturnToLobby", true)
+                returnBtn = returnBtn and returnBtn:FindFirstChild("button", true)
+                
+                if returnBtn and returnBtn.Visible then
+                    if clickGuiButton(returnBtn) then
+                        clickedReturn = true
+                        break
+                    end
+                end
+
+                -- Fallback to text matching
+                if clickButtonByText("return to lobby") or clickButtonByText("lobby") then
+                    clickedReturn = true
+                    break
+                end
+                task.wait(0.5)
+            end
+            
+            if not clickedReturn then
+                TeleportService:Teleport(3260590327)
+            end
+        else
+
+            -- Auto close lobby popups
+            task.spawn(function()
+                for i = 1, 30 do
+                    -- Close Updates/News popup
+                    local news = LocalPlayer.PlayerGui:FindFirstChild("ReactLobbyNews")
+                    local newsClose = news and news:FindFirstChild("Frame", true)
+                    newsClose = newsClose and newsClose:FindFirstChild("closeButton", true)
+                    newsClose = newsClose and newsClose:FindFirstChild("content", true)
+                    if newsClose and newsClose.Visible then
+                        clickGuiButton(newsClose)
+                    end
+
+                    -- Claim Login Rewards
+                    local login = LocalPlayer.PlayerGui:FindFirstChild("ReactLobbyLogin")
+                    local loginClaim = login and login:FindFirstChild("ImageLabel", true)
+                    loginClaim = loginClaim and loginClaim:FindFirstChild("confirm", true)
+                    loginClaim = loginClaim and loginClaim:FindFirstChild("button", true)
+                    loginClaim = loginClaim and loginClaim:FindFirstChild("content", true)
+                    if loginClaim and loginClaim.Visible then
+                        clickGuiButton(loginClaim)
+                    end
+
+                    -- General text matching close/claim
+                    clickButtonByText("claim")
+                    
+                    task.wait(0.5)
+                end
+            end)
+
+            local tutorial = LocalPlayer:WaitForChild("Tutorial", 15)
+            if tutorial then
+                while tutorial.Value < 2 do
+                    task.wait(1)
+                end
+            end
+
+            task.wait(3)
+
+            -- Click ITEMS Button
+            local itemsBtn = LocalPlayer.PlayerGui:WaitForChild("ReactLobbyHud", 15)
+            if itemsBtn then
+                itemsBtn = itemsBtn:FindFirstChild("Frame", true)
+                itemsBtn = itemsBtn and itemsBtn:FindFirstChild("leftElements", true)
+                itemsBtn = itemsBtn and itemsBtn:FindFirstChild("buttons", true)
+                itemsBtn = itemsBtn and itemsBtn:FindFirstChild("items", true)
+            end
+            if itemsBtn then
+                clickGuiButton(itemsBtn)
+                task.wait(2)
+            else
+                clickButtonByText("items")
+                task.wait(2)
+            end
+
+            -- Click Demoman
+            local inventoryView = LocalPlayer.PlayerGui:WaitForChild("ReactUniversalInventoryView", 15)
+            local demomanBtn = inventoryView and inventoryView:FindFirstChild("Demoman", true)
+            if demomanBtn then
+                demomanBtn = demomanBtn:FindFirstChild("main", true)
+            end
+            if demomanBtn then
+                clickGuiButton(demomanBtn)
+                task.wait(2)
+            end
+
+            -- Click OWNED/BUY button
+            local buttonsFrame = inventoryView and inventoryView:FindFirstChild("buttons", true)
+            local buyBtn = buttonsFrame and (buttonsFrame:FindFirstChild("1") or buttonsFrame:FindFirstChild("OWNED"))
+            if buyBtn then
+                local btnText = ""
+                for _, desc in ipairs(buyBtn:GetDescendants()) do
+                    if desc:IsA("TextLabel") then btnText = desc.Text break end
+                end
+
+                -- Purchase Demoman if needed
+                if string.find(string.lower(btnText), "buy") or string.find(string.lower(btnText), "200") or btnText == "" then
+                    clickGuiButton(buyBtn)
+                    task.wait(2)
+
+                    local yesBtn = LocalPlayer.PlayerGui:FindFirstChild("ReactUniversalSettings", true)
+                    if yesBtn then
+                        yesBtn = yesBtn:FindFirstChild("yes", true)
+                        yesBtn = yesBtn and yesBtn:FindFirstChild("content", true)
+                    end
+                    if yesBtn then
+                        clickGuiButton(yesBtn)
+                    else
+                        clickButtonByText("yes")
+                        clickButtonByText("confirm")
+                    end
+                    task.wait(2)
+                end
+
+                -- Equip Demoman
+                btnText = ""
+                for _, desc in ipairs(buyBtn:GetDescendants()) do
+                    if desc:IsA("TextLabel") then btnText = desc.Text break end
+                end
+                if string.find(string.lower(btnText), "equip") then
+                    clickGuiButton(buyBtn)
+                    task.wait(1.5)
+                end
+            end
+
+            -- Call Remote to Complete Tutorial
+            pcall(function()
+                NetworkMod.Channel("Tutorial"):InvokeServer("Complete")
+            end)
+
+            -- Rejoin lobby
+            task.wait(5)
+            pcall(function()
+                TeleportService:Teleport(3260590327)
+            end)
+        end
+    end)
+end
+
+StartTutorialSkip()
